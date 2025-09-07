@@ -1,0 +1,63 @@
+// app/login/page.tsx
+import React from 'react';
+import { getFirebase } from '../../lib/firebase-config';
+import { sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink, setPersistence, browserLocalPersistence } from "firebase/auth";
+
+const Login = () => {
+  const handleSend = async () => {
+    const { auth } = getFirebase();
+    const email = "user@example.com"; // Assume email is obtained from user input
+
+    try {
+      await setPersistence(auth, browserLocalPersistence);
+      await sendSignInLinkToEmail(auth, email, {
+        url: window.location.origin + "/login",
+        handleCodeInApp: true,
+      });
+      window.localStorage.setItem('emailForSignIn', email);
+      alert('Link enviado para o email!');
+    } catch (e: any) {
+      const code = e?.code || "";
+      if (code === "auth/configuration-not-found") {
+        alert([
+          "Firebase: configuração de Auth não encontrada.",
+          "- Habilite Authentication > Sign-in method > Email/Password e ative 'Email link (passwordless)'.",
+          "- Em Authentication > Settings > Authorized domains, adicione este domínio:",
+          window.location.host,
+          "- Confirme que o authDomain no firebase-config.ts é 'bdn-unidades.firebaseapp.com'."
+        ].join("\n"));
+      } else {
+        alert(e?.message || "Falha ao enviar link");
+      }
+    }
+  };
+
+  return (
+    <div>
+      <button onClick={handleSend}>Enviar Link de Login</button>
+      <p className="text-xs text-muted-foreground">Domínio atual: {typeof window !== "undefined" ? window.location.host : ""}</p>
+    </div>
+  );
+};
+
+export default Login;
+
+// lib/firebase-config.ts
+import { initializeApp } from "firebase/app";
+import { getAuth } from "firebase/auth";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyD1pT3X7ZJZJZJZJZJZJZJZJZJZJZJZJZ",
+  authDomain: "bdn-unidades.firebaseapp.com",
+  projectId: "bdn-unidades",
+  storageBucket: "bdn-unidades.appspot.com",
+  messagingSenderId: "123456789012",
+  appId: "1:123456789012:web:1234567890123456789012"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+
+// Lembrete: adicione o domínio {window.location?.host ?? "seu-dominio"} em Authentication > Settings > Authorized domains.
+
+export { app, auth };

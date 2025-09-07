@@ -1,0 +1,512 @@
+"use client"
+
+import { useEffect, useState } from "react"
+import { useAuth } from "@/components/auth-provider"
+import { getFirebase } from "@/lib/firebase-client"
+import { collection, getDocs, query, where, doc, updateDoc, deleteDoc } from "firebase/firestore"
+import { Button } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Badge } from "@/components/ui/badge"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import AdminNav from "@/components/admin-nav"
+import { Search, Church, Plus, MapPin, Edit, Trash2, Users, Crown, UserPlus, X, Calendar, Mail } from "lucide-react"
+import Link from "next/link"
+
+interface Pastor {
+  id: string
+  uid: string
+  email: string
+  displayName: string
+  role: "pastor_conselho" | "pastor_regional" | "pastor_local" | "secretaria"
+  regionId?: string
+  churchId?: string
+  createdAt: number
+}
+
+export default function PastoresPage() {
+  const { user, profile } = useAuth()
+  const [pastores, setPastores] = useState<Pastor[]>([])
+  const [filteredPastores, setFilteredPastores] = useState<Pastor[]>([])
+  const [churches, setChurches] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [searchTerm, setSearchTerm] = useState("")
+  const [filterRole, setFilterRole] = useState<string>("all")
+  const [editingPastor, setEditingPastor] = useState<Pastor | null>(null)
+  const [selectedChurchId, setSelectedChurchId] = useState<string>("no-church")
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!user || !profile) return
+    loadPastores()
+    loadChurches()
+    
+    // Escutar mudanças de vinculação de pastores
+    const handlePastorChurchUpdate = () => {
+      loadPastores()
+      loadChurches()
+    }
+    
+    window.addEventListener('pastorChurchUpdated', handlePastorChurchUpdate)
+    
+    return () => {
+      window.removeEventListener('pastorChurchUpdated', handlePastorChurchUpdate)
+    }
+  }, [user, profile])
+
+  useEffect(() => {
+    let filtered = pastores
+
+    // Filtro por role
+    if (filterRole !== "all") {
+      filtered = filtered.filter(pastor => pastor.role === filterRole)
+    }
+
+    // Filtro por busca
+    if (searchTerm) {
+      filtered = filtered.filter(pastor => 
+        pastor.displayName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        pastor.email.toLowerCase().includes(searchTerm.toLowerCase())
+      )
+    }
+
+    setFilteredPastores(filtered)
+  }, [pastores, searchTerm, filterRole])
+
+  async function loadPastores() {
+    try {
+      const { db } = getFirebase()
+      let pastoresQuery
+      
+      // Pastor regional só vê pastores da sua região (exceto ele mesmo)  
+      if (profile?.role === "pastor_regional") {
+        console.log("Filtering pastors for regional pastor. Profile:", profile)
+        console.log("Current user UID:", user?.uid)
+        
+        // Primeiro busca todos os usuários com roles pastorais
+        pastoresQuery = query(
+          collection(db, "users"),
+          where("role", "in", ["pastor_local", "secretaria"])
+        )
+      } else {
+        // Admin e pastor_conselho veem todos
+        pastoresQuery = query(
+          collection(db, "users"),
+          where("role", "in", ["pastor_conselho", "pastor_regional", "pastor_local", "secretaria"])
+        )
+      }
+      
+      const snapshot = await getDocs(pastoresQuery)
+      let pastoresData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        uid: doc.id,
+        ...doc.data()
+      })) as Pastor[]
+      
+      // Se é pastor regional, filtra apenas os da sua região
+      if (profile?.role === "pastor_regional" && profile?.regionId) {
+        pastoresData = pastoresData.filter(pastor => {
+          console.log(`Checking pastor ${pastor.displayName}: regionId=${pastor.regionId}, expected=${profile.regionId}`)
+          return pastor.regionId === profile.regionId
+        })
+      }
+      
+      console.log("Final filtered pastors:", pastoresData.length, pastoresData)
+      setPastores(pastoresData)
+    } catch (error) {
+      console.error("Erro ao carregar pastores:", error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function loadChurches() {
+    try {
+      const { db } = getFirebase()
+      const snapshot = await getDocs(collection(db, "places"))
+      const churchesData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }))
+      // Filtrar por qualquer tipo de igreja/place
+      const filteredChurches = churchesData.filter((place: any) => 
+        place.kind === "igreja" || 
+        place.kind === "regional" || 
+        place.kind === "local" || 
+        place.kind === "nucleo" ||
+        !place.kind || // Se não tem kind definido
+        place.type === "regional" || 
+        place.type === "local" || 
+        place.type === "nucleo"
+      )
+      console.log("Total places loaded:", churchesData.length)
+      console.log("All places data:", JSON.stringify(churchesData, null, 2))
+      console.log("Filtered churches:", filteredChurches.length, filteredChurches)
+      console.log("Churches state before set:", churches.length)
+      setChurches(filteredChurches)
+      console.log("Churches state after set should be:", filteredChurches.length)
+    } catch (error) {
+      console.error("Erro ao carregar igrejas:", error)
+    }
+  }
+
+  async function assignPastorToChurch(pastorId: string, churchId: string) {
+    setSaving(true)
+    try {
+      const { db } = getFirebase()
+      const finalChurchId = churchId === "no-church" ? null : churchId
+      await updateDoc(doc(db, "users", pastorId), { churchId: finalChurchId })
+      await loadPastores()
+      setEditingPastor(null)
+      setSelectedChurchId("no-church")
+    } catch (error) {
+      console.error("Erro ao vincular pastor à igreja:", error)
+      alert("Erro ao vincular pastor à igreja")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function getChurchName(churchId?: string) {
+    if (!churchId) return "Sem igreja"
+    const church = churches.find(c => c.id === churchId)
+    return church?.name || "Igreja não encontrada"
+  }
+
+  function openAssignChurch(pastor: Pastor) {
+    setEditingPastor(pastor)
+    setSelectedChurchId(pastor.churchId || "no-church")
+  }
+
+  async function deletePastor(pastorId: string) {
+    if (!confirm("Tem certeza que deseja remover este pastor?")) return
+    
+    try {
+      const { db } = getFirebase()
+      await deleteDoc(doc(db, "users", pastorId))
+      await loadPastores()
+    } catch (error) {
+      console.error("Erro ao remover pastor:", error)
+      alert("Erro ao remover pastor")
+    }
+  }
+
+  function getRoleIcon(role: string) {
+    switch (role) {
+      case "pastor_conselho": return <Crown className="h-4 w-4" />
+      case "pastor_regional": return <MapPin className="h-4 w-4" />
+      case "pastor_local": return <Church className="h-4 w-4" />
+      case "secretaria": return <Calendar className="h-4 w-4" />
+      default: return <Users className="h-4 w-4" />
+    }
+  }
+
+  function getRoleLabel(role: string) {
+    switch (role) {
+      case "pastor_conselho": return "Conselho"
+      case "pastor_regional": return "Regional"
+      case "pastor_local": return "Local"
+      case "secretaria": return "Secretaria"
+      default: return role
+    }
+  }
+
+  function getRoleColor(role: string) {
+    switch (role) {
+      case "pastor_conselho": return "bg-purple-500"
+      case "pastor_regional": return "bg-blue-500"
+      case "pastor_local": return "bg-green-500"
+      case "secretaria": return "bg-orange-500"
+      default: return "bg-gray-500"
+    }
+  }
+
+  if (!user) {
+    return (
+      <main className="min-h-dvh grid place-items-center">
+        <Card className="p-6">
+          <h1 className="text-xl font-semibold">Acesso Restrito</h1>
+          <p className="text-muted-foreground mt-2">Faça login para acessar esta página.</p>
+        </Card>
+      </main>
+    )
+  }
+
+  if (!profile || (profile.role !== "admin" && profile.role !== "pastor_conselho" && profile.role !== "pastor_regional")) {
+    return (
+      <main className="min-h-dvh grid place-items-center">
+        <Card className="p-6">
+          <h1 className="text-xl font-semibold">Acesso Restrito</h1>
+          <p className="text-muted-foreground mt-2">Apenas administradores podem gerenciar pastores.</p>
+        </Card>
+      </main>
+    )
+  }
+
+  return (
+    <>
+      <AdminNav currentPage="/admin/pastores" />
+      
+      <main className="lg:ml-80 pt-14 min-h-screen bg-muted/30">
+        <div className="p-6 space-y-6">
+          {/* Header */}
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-3xl font-bold">
+                {profile?.role === "pastor_regional" ? "Pastores da Região" : "Gestão de Pastores"}
+              </h1>
+              <p className="text-muted-foreground">
+                {profile?.role === "pastor_regional" 
+                  ? `Pastores da sua região ${profile?.regionId || ""} (${filteredPastores.length} total)`
+                  : "Gerencie a hierarquia pastoral: Conselho, Regional, Local e Secretaria"
+                }
+              </p>
+            </div>
+          </div>
+
+          {/* Actions Bar */}
+          <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
+            <div className="flex flex-col sm:flex-row gap-4 flex-1">
+              {/* Search */}
+              <div className="relative flex-1 max-w-md">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Buscar por nome ou email..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-10"
+                />
+              </div>
+
+              {/* Filter */}
+              <Select value={filterRole} onValueChange={setFilterRole}>
+                <SelectTrigger className="w-48">
+                  <SelectValue placeholder="Filtrar por nível" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos os níveis</SelectItem>
+                  <SelectItem value="pastor_conselho">Conselho</SelectItem>
+                  <SelectItem value="pastor_regional">Regional</SelectItem>
+                  <SelectItem value="pastor_local">Local</SelectItem>
+                  <SelectItem value="secretaria">Secretaria</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Invite Actions */}
+            <div className="flex gap-2">
+              <Button asChild variant="outline">
+                <Link href="/admin/convites">
+                  <Plus className="h-4 w-4 mr-2" />
+                  Convidar
+                </Link>
+              </Button>
+            </div>
+          </div>
+
+          {/* Statistics Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+            <Card className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Total de Pastores</p>
+                  <p className="text-2xl font-bold">{pastores.length}</p>
+                </div>
+                <Users className="h-8 w-8 text-blue-500" />
+              </div>
+            </Card>
+
+            <Card className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Conselho</p>
+                  <p className="text-2xl font-bold">
+                    {pastores.filter(p => p.role === "pastor_conselho").length}
+                  </p>
+                </div>
+                <Crown className="h-8 w-8 text-purple-500" />
+              </div>
+            </Card>
+
+            <Card className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Regional</p>
+                  <p className="text-2xl font-bold">
+                    {pastores.filter(p => p.role === "pastor_regional").length}
+                  </p>
+                </div>
+                <MapPin className="h-8 w-8 text-blue-500" />
+              </div>
+            </Card>
+
+            <Card className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Local</p>
+                  <p className="text-2xl font-bold">
+                    {pastores.filter(p => p.role === "pastor_local").length}
+                  </p>
+                </div>
+                <Church className="h-8 w-8 text-green-500" />
+              </div>
+            </Card>
+
+            <Card className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Secretaria</p>
+                  <p className="text-2xl font-bold">
+                    {pastores.filter(p => p.role === "secretaria").length}
+                  </p>
+                </div>
+                <Calendar className="h-8 w-8 text-orange-500" />
+              </div>
+            </Card>
+          </div>
+
+          {/* Pastores List */}
+          <Card className="p-6">
+            <div className="space-y-4">
+              {loading ? (
+                <div className="text-center py-8">
+                  <p className="text-muted-foreground">Carregando pastores...</p>
+                </div>
+              ) : filteredPastores.length === 0 ? (
+                <div className="text-center py-8">
+                  <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                  <h3 className="text-lg font-semibold">
+                    {searchTerm || filterRole !== "all" ? "Nenhum pastor encontrado" : "Nenhum pastor cadastrado"}
+                  </h3>
+                  <p className="text-muted-foreground">
+                    {searchTerm || filterRole !== "all" 
+                      ? "Tente ajustar os filtros de busca" 
+                      : "Comece enviando convites para pastores"
+                    }
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {filteredPastores.map((pastor) => (
+                    <div key={pastor.id} className="flex items-center justify-between p-4 bg-muted rounded-lg">
+                      <div className="flex items-center gap-4">
+                        <div className={`p-2 rounded-full ${getRoleColor(pastor.role)}`}>
+                          {getRoleIcon(pastor.role)}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="font-semibold">{pastor.displayName}</h3>
+                            <Badge variant="secondary" className="text-xs">
+                              {getRoleLabel(pastor.role)}
+                            </Badge>
+                          </div>
+                          <p className="text-sm text-muted-foreground">{pastor.email}</p>
+                          <div className="flex items-center gap-4 text-xs text-muted-foreground mt-1">
+                            <div className="flex items-center gap-1">
+                              <Calendar className="h-3 w-3" />
+                              Cadastrado em {new Date(pastor.createdAt).toLocaleDateString('pt-BR')}
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <Church className="h-3 w-3" />
+                              {getChurchName(pastor.churchId)}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="flex items-center gap-2">
+                        <Dialog open={editingPastor?.id === pastor.id} onOpenChange={(open) => {
+                          if (!open) {
+                            setEditingPastor(null)
+                            setSelectedChurchId("no-church")
+                          }
+                        }}>
+                          <DialogTrigger asChild>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => openAssignChurch(pastor)}
+                            >
+                              <Edit className="h-4 w-4 mr-1" />
+                              Igreja
+                            </Button>
+                          </DialogTrigger>
+                          <DialogContent>
+                            <DialogHeader>
+                              <DialogTitle>Vincular Pastor à Igreja - {pastor.displayName}</DialogTitle>
+                            </DialogHeader>
+                            <div className="space-y-4">
+                              <div className="space-y-2">
+                                <label className="text-sm font-medium">Igreja</label>
+                                <Select value={selectedChurchId} onValueChange={setSelectedChurchId}>
+                                  <SelectTrigger>
+                                    <SelectValue placeholder="Selecione uma igreja" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="no-church">Sem igreja</SelectItem>
+                                    {churches.length > 0 ? (
+                                      churches.map((church: any) => (
+                                        <SelectItem key={church.id} value={church.id}>
+                                          {church.name || church.displayName || `Igreja ${church.id}`}
+                                        </SelectItem>
+                                      ))
+                                    ) : (
+                                      <SelectItem value="loading" disabled>
+                                        Carregando igrejas...
+                                      </SelectItem>
+                                    )}
+                                  </SelectContent>
+                                </Select>
+                                {churches.length === 0 && (
+                                  <p className="text-sm text-muted-foreground">
+                                    Debug: {churches.length} igrejas carregadas
+                                  </p>
+                                )}
+                              </div>
+                              <div className="flex justify-end gap-2">
+                                <Button 
+                                  variant="outline" 
+                                  onClick={() => {
+                                    setEditingPastor(null)
+                                    setSelectedChurchId("no-church")
+                                  }}
+                                >
+                                  Cancelar
+                                </Button>
+                                <Button 
+                                  disabled={saving}
+                                  onClick={() => editingPastor && assignPastorToChurch(editingPastor.id, selectedChurchId)}
+                                >
+                                  {saving ? "Salvando..." : "Salvar"}
+                                </Button>
+                              </div>
+                            </div>
+                          </DialogContent>
+                        </Dialog>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => window.open(`mailto:${pastor.email}`, '_blank')}
+                        >
+                          <Mail className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => deletePastor(pastor.id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </Card>
+        </div>
+      </main>
+    </>
+  )
+}

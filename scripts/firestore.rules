@@ -1,0 +1,112 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc(uid) {
+      return get(/databases/$(database)/documents/users/$(uid));
+    }
+
+    function churchDoc(churchId) {
+      return get(/databases/$(database)/documents/places/$(churchId));
+    }
+
+    // Função simplificada que funciona
+    function isAdminUser() {
+      return signedIn() && request.auth.uid == "mRzTEJdYZhZWItSC4uzMylVkiGw1";
+    }
+
+    // Verifica se usuário tem role específico (suporta array e string)
+    function hasRole(role) {
+      return signedIn() && userDoc(request.auth.uid).exists() && (
+        (userDoc(request.auth.uid).data.keys().hasAll(['roles']) && 
+         userDoc(request.auth.uid).data.roles is list && 
+         role in userDoc(request.auth.uid).data.roles) ||
+        (userDoc(request.auth.uid).data.keys().hasAll(['role']) && 
+         userDoc(request.auth.uid).data.role == role)
+      );
+    }
+
+    // Verifica se é pastor do conselho
+    function isPastorConselho() {
+      return hasRole("pastor_conselho");
+    }
+
+    // Verifica se é pastor regional
+    function isPastorRegional() {
+      return hasRole("pastor_regional");
+    }
+
+    // Verifica se é pastor local
+    function isPastorLocal() {
+      return hasRole("pastor_local");
+    }
+
+    // Verifica se é secretaria de uma igreja específica
+    function isSecretaryOf(churchId) {
+      return signedIn() && userDoc(request.auth.uid).exists() &&
+        userDoc(request.auth.uid).data.keys().hasAll(['isSecretaryOf']) &&
+        userDoc(request.auth.uid).data.isSecretaryOf == churchId;
+    }
+
+    // Verifica se pode gerenciar uma igreja
+    function canManageChurch(churchId) {
+      return isAdminUser() || 
+             isPastorConselho() ||
+             isSecretaryOf(churchId) ||
+             (signedIn() && userDoc(request.auth.uid).exists() && 
+              userDoc(request.auth.uid).data.churchId == churchId);
+    }
+
+    // Verifica se pode convidar usuários
+    function canInviteUsers() {
+      return isAdminUser() || isPastorConselho() || isPastorRegional() || isPastorLocal();
+    }
+
+    // Perfis - Regras com suporte a hierarquia
+    match /users/{uid} {
+      // Leitura: próprio perfil ou admin/pastor_conselho
+      allow read: if signedIn() && (uid == request.auth.uid || isAdminUser() || isPastorConselho());
+      // Listagem: admin ou pastor_conselho
+      allow list: if isAdminUser() || isPastorConselho();
+      // Criação: próprio perfil
+      allow create: if signedIn() && uid == request.auth.uid;
+      // Atualização: próprio perfil ou admin/pastor_conselho
+      allow update: if signedIn() && (uid == request.auth.uid || isAdminUser() || isPastorConselho());
+      // Exclusão: apenas admin
+      allow delete: if isAdminUser();
+    }
+
+    // Convites - Hierarquia de convites
+    match /invites/{inviteId} {
+      allow create, update, delete, list: if canInviteUsers();
+      allow read: if canInviteUsers() || 
+        (signedIn() && resource.data.email == request.auth.token.email);
+    }
+
+    // Locais (igrejas) - Leitura pública, gerenciamento hierárquico
+    match /places/{placeId} {
+      // Leitura pública para homepage
+      allow read, list: if true;
+      // Criação: usuários logados
+      allow create: if signedIn();
+      // Atualização/exclusão: quem pode gerenciar a igreja
+      allow update, delete: if canManageChurch(placeId);
+    }
+
+    // Chat - Acesso básico para logados
+    match /rooms/{roomId}/messages/{msgId} {
+      allow read, list: if signedIn();
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isAdminUser() || isPastorConselho();
+    }
+
+    // Negar todo o resto
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
