@@ -1,21 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getApps, initializeApp, cert } from 'firebase-admin/app'
-import { getAuth } from 'firebase-admin/auth'
-import { getFirestore } from 'firebase-admin/firestore'
+import { getFirebaseAuth, getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase-admin-safe'
 import type { Role } from '@/lib/types'
 
-// Initialize Firebase Admin SDK
-if (!getApps().length) {
-  initializeApp({
-    credential: cert({
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-    }),
-  })
-}
-
 export async function POST(request: NextRequest) {
+  // Check if Firebase is properly configured
+  if (!isFirebaseConfigured()) {
+    return NextResponse.json(
+      { error: 'Firebase Admin SDK not configured' },
+      { status: 500 }
+    )
+  }
+
   try {
     const { email, password, role, roles, createdBy, regionId } = await request.json()
 
@@ -26,8 +21,8 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const auth = getAuth()
-    const db = getFirestore()
+    const auth = getFirebaseAuth()
+    const db = getFirebaseFirestore()
 
     // Create user with Firebase Admin SDK
     const userRecord = await auth.createUser({
