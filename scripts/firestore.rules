@@ -14,20 +14,25 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/places/$(churchId));
     }
 
-    // Função simplificada que funciona
+    // Função simplificada que funciona - permite múltiplos admins
     function isAdminUser() {
-      return signedIn() && request.auth.uid == "mRzTEJdYZhZWItSC4uzMylVkiGw1";
+      return signedIn() && (
+        request.auth.uid == "mRzTEJdYZhZWItSC4uzMylVkiGw1" ||
+        hasRole("admin") ||
+        hasRole("secretaria")
+      );
     }
 
-    // Verifica se usuário tem role específico (suporta array e string)
+    // Verifica se usuário tem role específico (suporta array e string) - versão mais segura
     function hasRole(role) {
-      return signedIn() && userDoc(request.auth.uid).exists() && (
-        (userDoc(request.auth.uid).data.keys().hasAll(['roles']) && 
-         userDoc(request.auth.uid).data.roles is list && 
-         role in userDoc(request.auth.uid).data.roles) ||
-        (userDoc(request.auth.uid).data.keys().hasAll(['role']) && 
-         userDoc(request.auth.uid).data.role == role)
-      );
+      return signedIn() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && (
+          (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.keys().hasAll(['roles']) && 
+           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles is list && 
+           role in get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles) ||
+          (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.keys().hasAll(['role']) && 
+           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == role)
+        );
     }
 
     // Verifica se é pastor do conselho
@@ -68,14 +73,14 @@ service cloud.firestore {
 
     // Perfis - Regras com suporte a hierarquia
     match /users/{uid} {
-      // Leitura: próprio perfil ou admin/pastor_conselho
-      allow read: if signedIn() && (uid == request.auth.uid || isAdminUser() || isPastorConselho());
-      // Listagem: admin ou pastor_conselho
-      allow list: if isAdminUser() || isPastorConselho();
+      // Leitura: próprio perfil, admin, pastor_conselho, pastor_regional ou pastor_local
+      allow read: if signedIn() && (uid == request.auth.uid || isAdminUser() || isPastorConselho() || isPastorRegional() || isPastorLocal());
+      // Listagem: admin, pastor_conselho, pastor_regional ou pastor_local
+      allow list: if isAdminUser() || isPastorConselho() || isPastorRegional() || isPastorLocal();
       // Criação: próprio perfil
       allow create: if signedIn() && uid == request.auth.uid;
-      // Atualização: próprio perfil ou admin/pastor_conselho
-      allow update: if signedIn() && (uid == request.auth.uid || isAdminUser() || isPastorConselho());
+      // Atualização: próprio perfil, admin, pastor_conselho, pastor_regional ou pastor_local
+      allow update: if signedIn() && (uid == request.auth.uid || isAdminUser() || isPastorConselho() || isPastorRegional() || isPastorLocal());
       // Exclusão: apenas admin
       allow delete: if isAdminUser();
     }

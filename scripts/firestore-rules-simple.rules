@@ -1,0 +1,53 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Função para verificar se é admin específico
+    function isSpecificAdmin() {
+      return signedIn() && request.auth.uid == "mRzTEJdYZhZWItSC4uzMylVkiGw1";
+    }
+
+    // Perfis - Regras simplificadas
+    match /users/{uid} {
+      // Leitura: próprio perfil ou admin específico
+      allow read: if signedIn() && (uid == request.auth.uid || isSpecificAdmin());
+      // Listagem: admin específico ou próprio usuário
+      allow list: if isSpecificAdmin() || signedIn();
+      // Criação: próprio perfil ou admin
+      allow create: if signedIn() && (uid == request.auth.uid || isSpecificAdmin());
+      // Atualização: próprio perfil ou admin
+      allow update: if signedIn() && (uid == request.auth.uid || isSpecificAdmin());
+      // Exclusão: apenas admin
+      allow delete: if isSpecificAdmin();
+    }
+
+    // Convites - Acesso para usuários logados
+    match /invites/{inviteId} {
+      allow create, update, delete, list, read: if signedIn();
+    }
+
+    // Locais (igrejas) - Leitura pública, gerenciamento para logados
+    match /places/{placeId} {
+      // Leitura pública para homepage
+      allow read, list: if true;
+      // Criação, atualização, exclusão: usuários logados
+      allow create, update, delete: if signedIn();
+    }
+
+    // Chat - Acesso básico para logados
+    match /rooms/{roomId}/messages/{msgId} {
+      allow read, list: if signedIn();
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if signedIn();
+    }
+
+    // Permitir acesso a outras coleções para usuários logados
+    match /{document=**} {
+      allow read, write: if signedIn();
+    }
+  }
+}
