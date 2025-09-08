@@ -1,20 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getApps, initializeApp, cert } from 'firebase-admin/app'
-import { getFirestore } from 'firebase-admin/firestore'
+import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase-admin-safe'
 import type { Role } from '@/lib/types'
 
-// Initialize Firebase Admin SDK
-if (!getApps().length) {
-  initializeApp({
-    credential: cert({
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-    }),
-  })
-}
-
 export async function POST(request: NextRequest) {
+  if (!isFirebaseConfigured()) {
+    return NextResponse.json(
+      { error: 'Firebase Admin SDK not configured' },
+      { status: 500 }
+    )
+  }
+
   try {
     const { uid, roles } = await request.json()
 
@@ -25,7 +20,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const db = getFirestore()
+    const db = getFirebaseFirestore()
 
     // Update user document with new roles
     await db.collection('users').doc(uid).update({
